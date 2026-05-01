@@ -75,19 +75,25 @@ class ChatController extends Controller
             return response()->json(['status' => 'success', 'is_locked' => true, 'session_id' => $sessionId]);
         }
 
-        // 3. Panggil AI
+        // 3. Panggil AI (FastAPI)
         try {
-            $response = Http::withoutVerifying()->post('https://api-nlp.safetalkai.my.id/predict', [
-                'text' => $request->message,
+            // Ubah URL di bawah ini ke alamat server FastAPI lu yang bener bray
+            // Misalnya 'http://127.0.0.1:8000/klasifikasi-chat' kalau di lokal
+            $response = Http::withoutVerifying()->post('https://api-nlp.safetalkai.my.id/klasifikasi-chat', [
+                'pesan_teks' => $request->message,
             ]);
 
             if ($response->successful()) {
                 $aiData = $response->json();
-                $kategori = $aiData['predicted_label'] ?? 'Umum';
-                $isEmergency = in_array($kategori, ['K1', 'K3']);
 
-                // Jika bahaya meningkat, perbarui ID Kasus (cth: UMUM-xxx jadi K1-xxx)
-                if ($kategori !== 'Umum' && $room->latest_category !== $kategori) {
+                // Ambil data sesuai respon dari FastAPI lu
+                $kategori = $aiData['kode_kategori'] ?? 'NON_KDRT';
+
+                // Sesuaikan status darurat (Di FastAPI lu K5 yang Darurat/Nyawa Terancam)
+                $isEmergency = in_array($kategori, ['K5']);
+
+                // Jika bahaya meningkat, perbarui ID Kasus (cth: UMUM-xxx jadi K5-xxx)
+                if ($kategori !== 'NON_KDRT' && $kategori !== 'SAPAAN' && $room->latest_category !== $kategori) {
                     $newCaseId = $kategori.'-'.date('Ymd').'-'.strtoupper(Str::random(4));
                     $room->update(['latest_category' => $kategori, 'case_id' => $newCaseId]);
                 }
@@ -100,26 +106,32 @@ class ChatController extends Controller
                 ChatMessage::create([
                     'chat_room_id' => $room->id,
                     'sender_type' => 'ai',
-                    'message' => $aiData['tanggapan_ai'] ?? '...',
+                    // Balasan bot diambil dari 'rekomendasi_sistem' API lu
+                    'message' => $aiData['rekomendasi_sistem'] ?? 'Pesan Anda telah kami terima.',
                     'reply_to_id' => $userMsg->id,
+                    // Instruksi singkat diambil dari method getInstruction
                     'instruction' => $this->getInstruction($kategori),
                 ]);
 
                 return response()->json(['status' => 'success', 'session_id' => $sessionId, 'is_locked' => $isEmergency]);
+            } else {
+                return response()->json(['error' => 'API FastAPI merespon error: '.$response->status()], 500);
             }
         } catch (\Exception $e) {
-            return response()->json(['error' => 'Service Down'], 500);
+            return response()->json(['error' => 'Service Down: '.$e->getMessage()], 500);
         }
     }
 
     private function getInstruction($kategori)
     {
         $map = [
-            'K1' => '🚨 DARURAT: Kekerasan Fisik. Hubungi Polisi (110).',
-            'K2' => '💡 ARAHAN: Kekerasan Psikis. Hubungi SEJIWA 119 Ext 8.',
-            'K3' => '🚨 DARURAT: Kekerasan Seksual. Hubungi SAPA 129.',
-            'K4' => '💡 ARAHAN: Penelantaran Ekonomi. Konsultasi LBH.',
-            'K5' => 'ℹ️ INFO: Hubungi DP3A (WA: 0811-1341-129).',
+            'SAPAAN' => '👋 Bot Menyapa',
+            "NON_KDRT" => "Bukan KDRT (Perasaan sedih, stres, depresi tanpa unsur kekerasan)",
+            "K1" => "💡 ARAHAN: Keluhan Ringan (Terkait relasi rumah tangga, belum jelas ada kekerasan)",
+            "K2" => "⚠️ PERINGATAN: Kekerasan Verbal / Emosional (Dibentak, dihina, direndahkan, dimaki)",
+            "K3" => "⚠️ PERINGATAN: Tekanan Psikologis / Kontrol (Intimidasi, ancaman, pengurungan, larangan)",
+            "K4" => "🚨 BAHAYA: Kekerasan Fisik (Dipukul, ditampar, ditendang, didorong, dijambak)",
+            "K5" => "🚨 DARURAT NYAWA: Kekerasan Berat / Darurat (Dicekik, diancam dibunuh, pakai senjata, luka parah)"
         ];
 
         return $map[$kategori] ?? null;
