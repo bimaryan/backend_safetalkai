@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Events\NewChatMessage;
 use App\Http\Controllers\Controller;
 use App\Models\ChatMessage;
 use App\Models\ChatRoom;
@@ -71,14 +72,15 @@ class ChatController extends Controller
             'reply_to_id' => $request->reply_to_id,
         ]);
 
+        // BROADCAST VIA REVERB: Kasih tau admin/penerima lain kalau ada pesan masuk
+        broadcast(new NewChatMessage($userMsg))->toOthers();
+
         if ($room->is_locked) {
             return response()->json(['status' => 'success', 'is_locked' => true, 'session_id' => $sessionId]);
         }
 
         // 3. Panggil AI (FastAPI)
         try {
-            // Ubah URL di bawah ini ke alamat server FastAPI lu yang bener bray
-            // Misalnya 'http://127.0.0.1:8000/klasifikasi-chat' kalau di lokal
             $response = Http::withoutVerifying()->post('https://api-nlp.safetalkai.my.id/klasifikasi-chat', [
                 'pesan_teks' => $request->message,
             ]);
@@ -86,13 +88,9 @@ class ChatController extends Controller
             if ($response->successful()) {
                 $aiData = $response->json();
 
-                // Ambil data sesuai respon dari FastAPI lu
                 $kategori = $aiData['kode_kategori'] ?? 'NON_KDRT';
-
-                // Sesuaikan status darurat (Di FastAPI lu K5 yang Darurat/Nyawa Terancam)
                 $isEmergency = in_array($kategori, ['K5']);
 
-                // Jika bahaya meningkat, perbarui ID Kasus (cth: UMUM-xxx jadi K5-xxx)
                 if ($kategori !== 'NON_KDRT' && $kategori !== 'SAPAAN' && $room->latest_category !== $kategori) {
                     $newCaseId = $kategori.'-'.date('Ymd').'-'.strtoupper(Str::random(4));
                     $room->update(['latest_category' => $kategori, 'case_id' => $newCaseId]);
@@ -102,16 +100,19 @@ class ChatController extends Controller
                     $room->update(['is_locked' => true]);
                 }
 
-                // 4. Simpan Pesan AI (AI membalas pesan warga tadi)
-                ChatMessage::create([
+                $balasanAI = $aiData['tanggapan_llm'] ?? ($aiData['rekomendasi_sistem_raw'] ?? 'Pesan Anda telah kami terima.');
+
+                // 4. Simpan Pesan AI 
+                $aiMsg = ChatMessage::create([
                     'chat_room_id' => $room->id,
                     'sender_type' => 'ai',
-                    // Balasan bot diambil dari 'rekomendasi_sistem' API lu
-                    'message' => $aiData['rekomendasi_sistem'] ?? 'Pesan Anda telah kami terima.',
+                    'message' => $balasanAI,
                     'reply_to_id' => $userMsg->id,
-                    // Instruksi singkat diambil dari method getInstruction
                     'instruction' => $this->getInstruction($kategori),
                 ]);
+
+                // BROADCAST VIA REVERB: Tembak pesan balasan AI langsung ke Frontend
+                broadcast(new NewChatMessage($aiMsg));
 
                 return response()->json(['status' => 'success', 'session_id' => $sessionId, 'is_locked' => $isEmergency]);
             } else {

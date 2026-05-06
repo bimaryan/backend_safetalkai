@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\Admin;
 
+use App\Events\NewChatMessage;
 use App\Exports\ReportsExport;
 use App\Http\Controllers\Controller;
 use App\Models\ChatMessage;
@@ -22,8 +23,7 @@ class AdminController extends Controller
             // 2. Hitung Total Interaksi Chat (Room)
             $totalChats = ChatRoom::count();
 
-            // 3. Ambil Distribusi Kategori (K1-K6, dll)
-            // Menghitung berapa banyak room untuk setiap kategori yang ada
+            // 3. Ambil Distribusi Kategori (K1-K5, dll)
             $categoryDistribution = ChatRoom::select('latest_category', DB::raw('count(*) as total'))
                 ->whereNotNull('latest_category')
                 ->groupBy('latest_category')
@@ -40,7 +40,7 @@ class AdminController extends Controller
                 ->map(function ($room) {
                     $lastMsg = $room->messages->first();
 
-                    // Membersihkan pesan dari tag --REPLY-- jika ada (opsional)
+                    // Membersihkan pesan dari tag --REPLY-- jika ada
                     $cleanMessage = $lastMsg ? $lastMsg->message : 'Tidak ada pesan';
                     if (str_contains($cleanMessage, '|--REPLY--|')) {
                         $cleanMessage = explode('|--REPLY--|', $cleanMessage)[1] ?? $cleanMessage;
@@ -83,8 +83,6 @@ class AdminController extends Controller
         }])
             ->when($search, function ($query) use ($search) {
                 $query->where(function ($q) use ($search) {
-                    // Gunakan LIKE (Case Insensitive tergantung collation DB)
-                    // Jika di Postgres tetap gunakan ILIKE
                     $q->where('case_id', 'LIKE', '%'.$search.'%')
                         ->orWhereHas('user', function ($u) use ($search) {
                             $u->where('nama_lengkap', 'LIKE', '%'.$search.'%');
@@ -93,7 +91,7 @@ class AdminController extends Controller
             })
             ->orderBy('updated_at', 'desc')
             ->paginate(15)
-            ->withQueryString(); // Memastikan param search ikut dalam link paginasi API
+            ->withQueryString();
 
         return response()->json(['status' => 'success', 'data' => $reports]);
     }
@@ -131,7 +129,7 @@ class AdminController extends Controller
     {
         $room = ChatRoom::findOrFail($id);
 
-        ChatMessage::create([
+        $adminMsg = ChatMessage::create([
             'chat_room_id' => $room->id,
             'sender_type' => 'admin',
             'message' => $request->message,
@@ -139,6 +137,9 @@ class AdminController extends Controller
         ]);
 
         $room->touch(); // Update jam room
+
+        // SINKRONISASI REVERB: Tembak pesan admin ini ke channel warga secara Real-Time
+        broadcast(new NewChatMessage($adminMsg))->toOthers();
 
         return response()->json(['status' => 'success']);
     }
@@ -166,7 +167,7 @@ class AdminController extends Controller
                 });
             })
             ->orderBy('updated_at', 'desc')
-            ->get(); // Ambil semua data (tanpa paginate) untuk export
+            ->get();
 
         return Excel::download(new ReportsExport($reports), 'laporan-safetalk-'.now()->format('Y-m-d').'.xlsx');
     }
