@@ -18,6 +18,7 @@ class AuthController extends Controller
                 'nama_lengkap' => $user->nama_lengkap,
                 'username' => $user->username,
                 'email' => $user->email,
+                'tanggal_lahir' => $user->tanggal_lahir,
                 'role' => $user->role
             ], 200);
         }
@@ -47,12 +48,14 @@ class AuthController extends Controller
             'nama_lengkap' => 'required|string|max:255',
             'username' => 'required|string|max:255|unique:users,username,' . $user->id,
             'email' => 'required|email|max:255|unique:users,email,' . $user->id,
+            'tanggal_lahir' => 'nullable|date', // <-- Tambahan validasi tanggal lahir
             'password' => 'nullable|string|min:8',
         ]);
 
         $user->nama_lengkap = $request->nama_lengkap;
         $user->username = $request->username;
         $user->email = $request->email;
+        $user->tanggal_lahir = $request->tanggal_lahir; // <-- Update data ke database
 
         // Update password jika form password diisi
         if ($request->filled('password')) {
