@@ -23,12 +23,21 @@ class AdminController extends Controller
             // 2. Hitung Total Interaksi Chat (Room)
             $totalChats = ChatRoom::count();
 
-            // 3. Ambil Distribusi Kategori (K1-K5, dll)
+            // 3. Ambil Distribusi Kategori (K1-K5, dll) untuk Pie Chart Tingkat Resiko
             $categoryDistribution = ChatRoom::select('latest_category', DB::raw('count(*) as total'))
                 ->whereNotNull('latest_category')
                 ->groupBy('latest_category')
                 ->pluck('total', 'latest_category')
                 ->toArray();
+            
+            // Format array object untuk mempermudah rendering Pie Chart di Frontend
+            $riskDistribution = [];
+            foreach ($categoryDistribution as $category => $total) {
+                $riskDistribution[] = [
+                    'name' => $category,
+                    'value' => $total
+                ];
+            }
 
             // 4. Ambil 5 Riwayat Interaksi Terbaru
             $recentReports = ChatRoom::with(['user:id,nama_lengkap', 'messages' => function ($q) {
@@ -62,6 +71,7 @@ class AdminController extends Controller
                     'total_users' => $totalUsers,
                     'total_chats' => $totalChats,
                     'category_distribution' => $categoryDistribution,
+                    'risk_distribution' => $riskDistribution,
                     'recent_reports' => $recentReports,
                 ],
             ]);
@@ -77,6 +87,7 @@ class AdminController extends Controller
     public function getAllReports(Request $request)
     {
         $search = $request->query('search');
+        $month = $request->query('month'); // Format YYYY-MM
 
         $reports = ChatRoom::with(['user:id,nama_lengkap', 'messages' => function ($q) {
             $q->latest()->limit(1);
@@ -88,6 +99,10 @@ class AdminController extends Controller
                             $u->where('nama_lengkap', 'LIKE', '%'.$search.'%');
                         });
                 });
+            })
+            ->when($month, function ($query) use ($month) {
+                $query->whereMonth('created_at', date('m', strtotime($month)))
+                      ->whereYear('created_at', date('Y', strtotime($month)));
             })
             ->orderBy('updated_at', 'desc')
             ->paginate(15)
@@ -154,6 +169,7 @@ class AdminController extends Controller
     public function exportReports(Request $request)
     {
         $search = $request->query('search');
+        $month = $request->query('month'); // Format YYYY-MM
 
         $reports = ChatRoom::with(['user:id,nama_lengkap', 'messages' => function ($q) {
             $q->latest()->limit(1);
@@ -165,6 +181,10 @@ class AdminController extends Controller
                             $u->where('nama_lengkap', 'LIKE', '%'.$search.'%');
                         });
                 });
+            })
+            ->when($month, function ($query) use ($month) {
+                $query->whereMonth('created_at', date('m', strtotime($month)))
+                      ->whereYear('created_at', date('Y', strtotime($month)));
             })
             ->orderBy('updated_at', 'desc')
             ->get();
